@@ -2,29 +2,73 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { JwtService } from '@nestjs/jwt';
-
+import * as bcrypt from 'bcrypt';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { LoginDto } from './dto/login-auth.dto';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
 
 interface User {
-  id: number;
-  username: string;
+  email: string;
+  password: string;
 }
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly jwtService: JwtService, private readonly configService:ConfigService) {}
+  constructor(private readonly jwtService: JwtService, private readonly configService: ConfigService, private readonly prismaService: PrismaService) { }
 
-  async login(user: User) {
-    const payload = { sub: user.id, username: user.username };
-    
+  async login(dto: LoginDto) {
+  const user = await this.validateUser(dto.email, dto.password);
+
+  const payload : JwtPayload= { email: user.email, username: user.name, sub: user.id };
+
+  const { access_token, refresh_token } = this.generateTokens(payload);
+
+  await this.saveOrUpdateRefreshToken(user.id, refresh_token);
+
+  return { access_token, refresh_token };
+}
+
+
+  private async validateUser(email: string, password: string) {
+    const user = await this.prismaService.user.findUnique({ where: { email } });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Contraseña incorrecta');
+    }
+
+    return user;
+  }
+  private generateTokens(payload: any) {
     const access_token = this.jwtService.sign(payload);
 
     const refresh_token = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-      expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRATION'),
+      secret: this.configService.get<string>('REFRESH_TOKEN_SECRET')!,
+      expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRATION')!,
     });
 
-    // Aquí puedes guardar el refresh token en DB si quieres invalidarlo después
     return { access_token, refresh_token };
+  }
+  private async saveOrUpdateRefreshToken(userId: string, token: string) {
+    const existing = await this.prismaService.refreshToken.findFirst({ where: { userId } });
+
+    if (existing) {
+      await this.prismaService.refreshToken.update({
+        where: { id: existing.id },
+        data: { token },
+      });
+    } else {
+      await this.prismaService.refreshToken.create({
+        data: {
+          token,
+          userId,
+        },
+      });
+    }
   }
 
   async refresh(refreshToken: string) {

@@ -9,8 +9,7 @@ export class AuthController {
 
    @Post('login')
   async login(@Body() body: LoginDto) {
-    const user = { id: 1, username: body.username };
-    return this.authService.login(user);
+    return this.authService.login(body);
   }
 
   @Post('refresh')
